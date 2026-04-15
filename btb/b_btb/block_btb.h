@@ -1,42 +1,35 @@
-#pragma once
-#include <cstdint>
+#ifndef BTB_BLOCK_BTB_H
+#define BTB_BLOCK_BTB_H
 
-#define BLOCK_SIZE 16              // instructions per block
-#define MAX_BRANCH_SLOTS 2         // configurable
+#include "address.h"
+#include "direct_predictor.h"
+#include "indirect_predictor.h"
+#include "modules.h"
+#include "return_stack.h"
 
-struct BlockBTBBranch {
-    uint8_t  offset;        // instruction offset in block
-    uint64_t target;
-    bool     is_conditional;
-    bool     is_indirect;
-};
+/*
+ * block_btb – Block BTB (B-BTB), ChampSim module
+ * ===============================================
+ * Based on: Perais & Sheikh, "Branch Target Buffer Organizations", MICRO '23
+ * (DOI 10.1145/3613424.3623774).
+ *
+ * One BTB entry covers a fixed instruction block (BLOCK_SIZE insts × 4 B =
+ * 64 B), with up to MAX_BRANCHES branch slots keyed by instruction offset in
+ * the block — same structural pattern as region_btb / region_predictor, but
+ * with per-instruction offsets instead of byte offsets within a region.
+ */
+class block_btb : champsim::modules::btb
+{
+  return_stack ras{};
+  indirect_predictor indirect{};
+  direct_predictor direct{};
 
-struct BlockBTBEntry {
-    uint64_t tag;
-    bool     valid;
-
-    uint8_t  num_insts;
-    uint8_t  num_branches;
-
-    BlockBTBBranch branches[MAX_BRANCH_SLOTS];
-
-    uint64_t fallthrough;
-};
-
-class BlockBTB {
 public:
-    BlockBTB(int sets, int ways);
+  using btb::btb;
+  block_btb() : btb(nullptr) {}
 
-    BlockBTBEntry* lookup(uint64_t pc);
-    void update(uint64_t pc, uint64_t target, bool taken,
-                bool is_conditional, bool is_indirect);
-
-private:
-    int NUM_SETS;
-    int NUM_WAYS;
-
-    BlockBTBEntry **table;
-
-    uint64_t get_index(uint64_t pc);
-    uint64_t get_tag(uint64_t pc);
+  std::pair<champsim::address, bool> btb_prediction(champsim::address ip);
+  void update_btb(champsim::address ip, champsim::address branch_target, bool taken, uint8_t branch_type);
 };
+
+#endif

@@ -1,26 +1,61 @@
-#include "btb_block.h"
-#include <cstdlib>
+/*
+ * block_btb.cc – Block BTB prediction and update
+ * -----------------------------------------------
+ * Mirrors region_btb.cc: after a hit on the block-aligned entry, select the
+ * first valid branch slot whose instruction offset is >= the fetch PC's
+ * offset within the block (Section 3.6.1-style fetch-PC vs slot offset).
+ */
 
-#define LOG2_BLOCK_SIZE 4   // 16 instructions
-#define INST_SIZE 4         // assume 4B ISA
+#include "block_btb.h"
 
-BlockBTB::BlockBTB(int sets, int ways) {
-    NUM_SETS = sets;
-    NUM_WAYS = ways;
+#include "instruction.h"
 
-    table = new BlockBTBEntry*[NUM_SETS];
-    for (int i = 0; i < NUM_SETS; i++) {
-        table[i] = new BlockBTBEntry[NUM_WAYS];
-        for (int j = 0; j < NUM_WAYS; j++) {
-            table[i][j].valid = false;
-        }
-    }
+std::pair<champsim::address, bool> block_btb::btb_prediction(champsim::address ip)
+{
+  auto opt_entry = direct.check_hit(ip);
+
+  if (!opt_entry.has_value())
+    return {champsim::address{}, false};
+
+  constexpr auto BLOCK_BYTES = direct_predictor::BLOCK_BYTES;
+  champsim::address block_ip = ip & ~(static_cast<unsigned long long>(BLOCK_BYTES) - 1);
+  uint8_t ip_instr_off = static_cast<uint8_t>((ip - block_ip) / 4);
+
+  const direct_predictor::btb_branch_slot* best = nullptr;
+  for (const auto& slot : opt_entry->branches) {
+    if (!slot.valid)
+      continue;
+    if (slot.offset < ip_instr_off)
+      continue;
+    if (best == nullptr || slot.offset < best->offset)
+      best = &slot;
+  }
+
+  if (best == nullptr)
+    return {champsim::address{}, false};
+
+  if (best->type == direct_predictor::branch_info::RETURN)
+    return ras.prediction();
+
+  if (best->type == direct_predictor::branch_info::INDIRECT)
+    return indirect.prediction(ip);
+
+  return {best->target, best->type != direct_predictor::branch_info::CONDITIONAL};
 }
 
-uint64_t BlockBTB::get_index(uint64_t pc) {
-    return (pc >> LOG2_BLOCK_SIZE) % NUM_SETS;
-}
+void block_btb::update_btb(champsim::address ip, champsim::address branch_target, bool taken, uint8_t branch_type)
+{
+  if (branch_type == BRANCH_DIRECT_CALL || branch_type == BRANCH_INDIRECT_CALL)
+    ras.push(ip);
 
-uint64_t BlockBTB::get_tag(uint64_t pc) {
-    return pc >> (LOG2_BLOCK_SIZE);
+  if ((branch_type == BRANCH_INDIRECT) || (branch_type == BRANCH_INDIRECT_CALL))
+    indirect.update_target(ip, branch_target);
+
+  if (branch_type == BRANCH_CONDITIONAL)
+    indirect.update_direction(taken);
+
+  if (branch_type == BRANCH_RETURN)
+    ras.calibrate_call_size(branch_target);
+
+  direct.update(ip, branch_target, branch_type);
 }
