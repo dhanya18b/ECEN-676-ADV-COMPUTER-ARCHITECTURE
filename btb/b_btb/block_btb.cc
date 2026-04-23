@@ -38,7 +38,7 @@ std::pair<champsim::address, bool> block_btb::btb_prediction(champsim::address i
     return ras.prediction();
 
   if (best->type == direct_predictor::branch_info::INDIRECT)
-    return indirect.prediction(ip);
+    return indirect.prediction(block_ip + static_cast<unsigned long long>(best->offset) * 4ULL);
 
   return {best->target, best->type != direct_predictor::branch_info::CONDITIONAL};
 }
